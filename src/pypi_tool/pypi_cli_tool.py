@@ -383,11 +383,13 @@ def handle_install_command(args):
 
 # --- Main Execution Block ---
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="PyPI Package Management Tool (Download, Resolve, Install).")
 
     # Common arguments
-    default_max_workers = min(5, os.cpu_count() + 4 if os.cpu_count() else 5)
+    # Ensure os.cpu_count() is handled for potential None return
+    cpu_cores = os.cpu_count()
+    default_max_workers = min(5, cpu_cores + 4 if cpu_cores else 5)
 
     subparsers = parser.add_subparsers(title="Commands", dest="command", required=True,
                                        help="Available commands")
@@ -398,8 +400,6 @@ if __name__ == "__main__":
     parser_download.add_argument("--version", help="Version of the package to download (optional, default is latest).")
     parser_download.add_argument("--output-dir", default="./downloads/",
                                  help="Directory to save downloaded files (default: ./downloads/).")
-    # Max workers for 'download' might be useful if it's extended to download multiple packages or parts in parallel.
-    # For a single file download, it's less relevant but kept for consistency or future use.
     parser_download.add_argument("--max-workers", type=int, default=default_max_workers,
                                  help=f"Max number of parallel workers (default: {default_max_workers}). Currently mainly for internal ops if any.")
     parser_download.set_defaults(func=handle_download_command)
@@ -420,6 +420,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.func(args) # Call the appropriate handler function
+
+if __name__ == "__main__":
+    main()
 
 
 # Future steps for downloader:

@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+setup.py
+src/pypi_tool/__init__.py
+src/pypi_tool/package_installer.py
+src/pypi_tool/pypi_cli_tool.py
+src/pypi_tool_analog.egg-info/PKG-INFO
+src/pypi_tool_analog.egg-info/SOURCES.txt
+src/pypi_tool_analog.egg-info/dependency_links.txt
+src/pypi_tool_analog.egg-info/entry_points.txt
+src/pypi_tool_analog.egg-info/requires.txt
+src/pypi_tool_analog.egg-info/top_level.txt

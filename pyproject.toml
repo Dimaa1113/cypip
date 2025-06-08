@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+# backend-path = ["."] # Removing backend-path; setuptools should be found via requires
+
+[project]
+name = "pypi-tool-analog"
+version = "0.1.0"
+description = "A prototype Python package management tool with parallel capabilities."
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "requests>=2.20.0",
+    "beautifulsoup4>=4.9.0"
+]
+
+# Classifiers help users find your project by categorizing it.
+# classifiers = [
+#     "Development Status :: 3 - Alpha",
+#     "Intended Audience :: Developers",
+#     "Topic :: Software Development :: Build Tools",
+#     "Topic :: System :: Archiving :: Packaging",
+#     "License :: OSI Approved :: MIT License", # Assuming MIT License
+#     "Programming Language :: Python :: 3",
+#     "Programming Language :: Python :: 3.7",
+#     "Programming Language :: Python :: 3.8",
+#     "Programming Language :: Python :: 3.9",
+#     "Programming Language :: Python :: 3.10",
+#     "Programming Language :: Python :: 3.11",
+#     "Operating System :: OS Independent",
+# ]
+
+[project.scripts]
+pypitool = "pypi_tool.pypi_cli_tool:main"

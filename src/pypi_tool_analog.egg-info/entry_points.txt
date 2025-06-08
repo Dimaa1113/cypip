@@ -1,0 +1,2 @@
+[console_scripts]
+pypitool = pypi_tool.pypi_cli_tool:main
