@@ -9,12 +9,18 @@ import sys
 import shutil
 from pathlib import Path
 import functools
-# No packaging imports
+import site # Added for determine_target_install_dir
 
 """
 PyRush: PyPI Package Management Tool
 (Description and ARM64 considerations as before)
 """
+
+# --- Verbose Print Helper ---
+def print_verbose(*args, **kwargs):
+    # In future, this could check a verbosity flag from args
+    print("VERBOSE:", *args, **kwargs, file=sys.stderr)
+    sys.stderr.flush()
 
 # --- Cache Directory Helper ---
 def get_cache_dir(custom_cache_dir_str=None):
@@ -23,6 +29,71 @@ def get_cache_dir(custom_cache_dir_str=None):
     try: os.makedirs(cache_dir, exist_ok=True)
     except OSError as e: print(f"Warning: Could not create cache directory {cache_dir}: {e}. Caching might be unreliable or disabled.")
     return cache_dir
+
+# --- Target Install Directory Determination ---
+def determine_target_install_dir():
+    '''
+    Determines a suitable default installation directory for packages.
+    Priority:
+    1. Active virtual environment's site-packages.
+    2. User's site-packages directory.
+    3. First writable system site-packages directory found in sys.path (use with caution).
+    Returns the path as a string, or None if no suitable writable path is found.
+    '''
+    # --- Original logic restored ---
+    print_verbose("Attempting to determine default installation directory...")
+
+    # 1. Check for an active virtual environment
+    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+        print_verbose(f"Virtual environment detected at: {sys.prefix}")
+        for path_item in sys.path:
+            if isinstance(path_item, str) and sys.prefix in path_item and 'site-packages' in path_item.lower():
+                if os.path.isdir(path_item) and os.access(path_item, os.W_OK):
+                    print_verbose(f"Using virtual environment site-packages: {path_item}")
+                    return path_item
+                else:
+                    print_verbose(f"Found venv site-packages '{path_item}' but it's not writable or not a directory.")
+        print_verbose("Could not find a writable site-packages directory within the active virtual environment.")
+    else:
+        print_verbose("No active virtual environment detected.")
+
+    # 2. Try user's site-packages directory
+    if hasattr(site, 'getusersitepackages'):
+        user_site_paths = site.getusersitepackages()
+        if isinstance(user_site_paths, str): user_site_paths = [user_site_paths] # Ensure it's a list
+
+        for user_site in user_site_paths:
+            print_verbose(f"Checking user site-packages: {user_site}")
+            try:
+                if not os.path.exists(user_site):
+                    print_verbose(f"User site-packages '{user_site}' does not exist. Attempting to create.")
+                    os.makedirs(user_site, exist_ok=True)
+
+                if os.path.isdir(user_site) and os.access(user_site, os.W_OK):
+                    print_verbose(f"Using (potentially newly created) user site-packages: {user_site}")
+                    return user_site
+                else:
+                    print_verbose(f"User site-packages '{user_site}' is not writable or could not be confirmed after creation attempt.")
+            except Exception as e:
+                print_verbose(f"Error creating or checking user site-packages '{user_site}': {e}")
+    else:
+        print_verbose("`site.getusersitepackages()` not available or returned unexpected type.")
+
+    # 3. Fallback: First writable site-packages in sys.path (use with caution)
+    print_verbose("Checking all paths in sys.path for a writable site-packages directory (fallback)...")
+    for path_item in sys.path:
+        if isinstance(path_item, str) and 'site-packages' in path_item.lower():
+            if os.path.isdir(path_item) and os.access(path_item, os.W_OK):
+                if (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)) and sys.prefix not in path_item:
+                    print_verbose(f"Skipping site-packages '{path_item}' as it appears to be from a different environment.")
+                    continue
+                print_verbose(f"Warning: Using a globally visible site-packages directory: {path_item}. "
+                              "Consider using a virtual environment or the --user scheme for safer installs.")
+                return path_item
+
+    print_verbose("Could not determine a suitable default writable installation directory from sys.path site-packages.")
+    return None
+
 
 # --- Download Functions ---
 def download_file(url, output_directory, filename_from_url, use_cache=True, cache_dir_path=None):
@@ -121,29 +192,19 @@ MAX_RECURSION_DEPTH = 20
 def resolve_dependencies_recursive(current_package_name, already_processed_packages, all_discovered_dependencies_set, depth=0):
     indent = "  " * depth
     normalized_current_package_name = current_package_name.lower().replace("_", "-")
-    # print(f"{indent}Depth {depth}: Received '{current_package_name}', Normalized to '{normalized_current_package_name}' for processing.") # Diagnostic
-
     if depth > MAX_RECURSION_DEPTH:
         print(f"{indent}ERROR: Max recursion depth ({MAX_RECURSION_DEPTH}) exceeded for {normalized_current_package_name}. Stopping this path.", file=sys.stderr)
         return
-
-    if normalized_current_package_name in already_processed_packages:
-        # print(f"{indent}Depth {depth}: Already processed '{normalized_current_package_name}'. Skipping.") # Diagnostic
-        return
-
+    if normalized_current_package_name in already_processed_packages: return
     print(f"Processing: {normalized_current_package_name}")
     already_processed_packages.add(normalized_current_package_name)
     all_discovered_dependencies_set.add(normalized_current_package_name)
-
     metadata = get_package_metadata_json(normalized_current_package_name)
     if not metadata and current_package_name != normalized_current_package_name:
-        # print(f"  Retrying metadata fetch for '{current_package_name}' (original case) as '{normalized_current_package_name}' failed.") # Diagnostic
         metadata = get_package_metadata_json(current_package_name)
-
     if not metadata:
         print(f"Could not fetch metadata for {current_package_name} (tried as {normalized_current_package_name}). Skipping its dependencies.")
         return
-
     requires_dist_list = metadata.get("info", {}).get("requires_dist")
     if requires_dist_list:
         for dep_string in requires_dist_list:
@@ -151,12 +212,8 @@ def resolve_dependencies_recursive(current_package_name, already_processed_packa
             if package_name_to_resolve:
                 if ";" in dep_string:
                     parts = dep_string.split(";",1); marker_str = parts[1].strip()
-                    if "extra ==" in marker_str:
-                        # print(f"  Skipping extra: '{dep_string}' (resolving base '{package_name_to_resolve}' anyway).", file=sys.stderr) # Diagnostic
-                        pass # For now, resolve base name even if it's an extra.
-                    elif "python_version" in marker_str:
-                        # print(f"  Info: Dep '{package_name_to_resolve}' has python_version marker: '{marker_str}'. Resolving base.", file=sys.stderr) # Diagnostic
-                        pass
+                    if "extra ==" in marker_str: pass
+                    elif "python_version" in marker_str: pass
                 resolve_dependencies_recursive(package_name_to_resolve, already_processed_packages, all_discovered_dependencies_set, depth + 1)
             else:
                 print(f"Warning: Could not parse package name from dependency string: '{dep_string}' for package '{current_package_name}'", file=sys.stderr)
@@ -211,17 +268,37 @@ def handle_download_command(args):
     print("--- Download finished ---")
 
 def handle_install_command(args):
+    # Determine target directory
+    if args.target_dir:
+        target_directory = args.target_dir
+        print_verbose(f"User specified target directory: {target_directory}")
+    else:
+        print_verbose("No target directory specified by user. Attempting to determine a default.")
+        target_directory = determine_target_install_dir()
+        if target_directory:
+            # Use a more prominent print for auto-determined paths for user awareness
+            print(f"PyRush will install packages to the automatically determined directory: {target_directory}")
+            print("Use the --target-dir option to specify a different location if this is not suitable.")
+        else:
+            print("Error: Could not automatically determine a suitable installation directory.", file=sys.stderr)
+            print("Please specify an installation directory using the --target-dir option.", file=sys.stderr)
+            sys.exit(1) # Exit if no target directory can be used
+
     print(f"--- Starting full install process for {args.package_name} ---")
-    print(f"--- Target environment directory: {os.path.abspath(args.target_dir)} ---")
+    # Use the 'target_directory' variable determined above
+    print(f"--- Target environment directory: {os.path.abspath(target_directory)} ---")
+
     use_cache = not args.no_cache
     actual_cache_dir = get_cache_dir(args.cache_dir) if use_cache else None
     if use_cache: print(f"--- Cache enabled. Cache directory: {actual_cache_dir} ---")
     else: print("--- Cache disabled ---")
+
     all_deps = set(); processed_pkgs = set()
     print(f"\nStep 1: Resolving dependencies for {args.package_name}...")
     initial_package_name = args.package_name
     resolve_dependencies_recursive(initial_package_name, processed_pkgs, all_deps, depth=0)
     if not all_deps: print("No dependencies found. Aborting install."); print("\n--- Full install process finished ---"); return
+
     dl_dir = "./downloads"; os.makedirs(dl_dir, exist_ok=True)
     print(f"\nStep 2: Downloading {len(all_deps)} packages to '{dl_dir}' using up to {args.max_workers} workers...")
     sorted_deps = sorted(list(all_deps)); dl_results = []; good_wheels = []
@@ -241,14 +318,17 @@ def handle_install_command(args):
     print("\nDownload Summary:")
     dl_ok_count = len(good_wheels); print(f"  {dl_ok_count} of {len(dl_results)} downloaded successfully.")
     if dl_ok_count < len(dl_results): print("  Failed/Skipped downloads:"); [print(f"    - {r['name']}: {r['error']}") for r in dl_results if r["status"] != "Success"]
+
     if good_wheels:
-        print(f"\nStep 3: Installing {len(good_wheels)} packages into {args.target_dir} using up to {args.max_workers} workers...")
+        # Use the 'target_directory' variable here
+        print(f"\nStep 3: Installing {len(good_wheels)} packages into {target_directory} using up to {args.max_workers} workers...")
         install_results = []
         installer_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "package_installer.py")
         if not os.path.exists(installer_path): print(f"  ERROR: package_installer.py not found at {installer_path}. Cannot install.");
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-                future_map_install = {executor.submit(subprocess.run, [sys.executable, installer_path, p, args.target_dir], capture_output=True, text=True): p for p in good_wheels}
+                # Pass 'target_directory' to subprocess
+                future_map_install = {executor.submit(subprocess.run, [sys.executable, installer_path, p, target_directory], capture_output=True, text=True): p for p in good_wheels}
                 for i, future in enumerate(concurrent.futures.as_completed(future_map_install)):
                     wheel_path_done = future_map_install[future]; pkg_name_wheel = os.path.basename(wheel_path_done).split('-',1)[0]
                     try:
@@ -278,7 +358,9 @@ def main():
 
     p_in = subparsers.add_parser("install", help="Resolve, download, and install a package and its dependencies.")
     p_in.add_argument("package_name", help="Name of the root package.")
-    p_in.add_argument("--target-dir", default="./installed_packages/", help="Target installation directory (default: ./installed_packages/).")
+    # --target-dir default is now handled by the logic in handle_install_command if not provided
+    p_in.add_argument("--target-dir", default=None,
+                        help="Target installation directory (e.g., ./my_env/site-packages/). Auto-detected if not provided.")
     p_in.add_argument("--max-workers", type=int, default=default_max_workers, help=f"Max parallel workers (default: {default_max_workers}).")
     p_in.add_argument("--no-cache", action="store_true", help="Disable download cache.")
     p_in.add_argument("--cache-dir", default=None, type=str, help="Custom cache directory.")

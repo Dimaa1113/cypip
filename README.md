@@ -12,6 +12,7 @@ This tool is intended as an educational example and a proof-of-concept for certa
 *   **Parallel Downloads:** Downloads required packages from PyPI concurrently to speed up the acquisition process.
 *   **Parallel Installation:** Installs downloaded `.whl` packages into a target directory in parallel.
 *   **Command-Line Interface:** Provides a `pyrush` command with sub-commands for different actions (`resolve`, `download`, `install`).
+*   **Automatic Target Directory Detection:** For the `install` command, PyRush can automatically detect suitable installation directories (e.g., active virtual environment, user site-packages).
 
 ## Requirements
 
@@ -65,25 +66,39 @@ pyrush <command> [options] <package_name>
 *   `pyrush resolve <package_name>`
     *   Resolves and lists all unique dependencies for the specified `<package_name>`.
 
-*   `pyrush download <package_name> [--version <version>] [--output-dir <dir>] [--max-workers <N>]`
+*   `pyrush download <package_name> [--version <version>] [--output-dir <dir>] [--max-workers <N>] [--no-cache] [--cache-dir <cache_dir>]`
     *   Downloads the specified `<package_name>`.
     *   `--version`: Download a specific version. Defaults to the latest suitable if not provided.
     *   `--output-dir`: Directory to save the downloaded file(s) (default: `./downloads/`).
-    *   `--max-workers`: Number of parallel workers (currently mainly relevant if the command is extended for multiple packages).
+    *   `--max-workers`: Number of parallel workers.
+    *   `--no-cache`: Disable download caching.
+    *   `--cache-dir`: Specify a custom cache directory.
 
-*   `pyrush install <package_name> [--target-dir <dir>] [--max-workers <N>]`
-    *   Resolves all dependencies for `<package_name>`, downloads them, and then installs them all into the specified target directory.
-    *   `--target-dir`: Directory where packages will be installed (default: `./installed_packages/`). This should typically be a `site-packages` directory within a virtual environment.
-    *   `--max-workers`: Number of parallel workers for download and install phases.
+*   `pyrush install <package_name> [--target-dir <dir>] [--max-workers <N>] [--no-cache] [--cache-dir <cache_dir>]`
+    *   Resolves all dependencies for `<package_name>`, downloads them, and then installs them all.
+    *   `--target-dir <dir>`: Optional. Directory where packages will be installed. If not provided, PyRush attempts to auto-detect a suitable `site-packages` directory (see "Automatic Target Directory Detection" below).
+    *   `--max-workers <N>`: Number of parallel workers for download and install phases.
+    *   `--no-cache`: Disable download caching for the download phase.
+    *   `--cache-dir <cache_dir>`: Specify a custom cache directory for the download phase.
+
+**Automatic Target Directory Detection (for `install` command):**
+
+If `--target-dir` is not specified for the `install` command, PyRush will attempt to find a suitable default `site-packages` directory in the following order of priority:
+1.  The `site-packages` directory of an active Python virtual environment.
+2.  The user-specific `site-packages` directory (e.g., `~/.local/lib/pythonX.Y/site-packages` on Linux). PyRush will attempt to create this directory if it doesn't exist.
+3.  As a last resort, the first writable system-level `site-packages` directory found in Python's search path (a warning will be issued if this fallback is used).
+
+It is generally recommended to use virtual environments or explicitly specify `--target-dir` for clarity and to avoid unintended installations, especially if you have multiple Python installations or complex setups. If PyRush cannot determine a suitable default directory, it will exit with an error, requiring you to use the `--target-dir` option.
 
 **Example for `install` command:**
+To install `flask` and its dependencies into a specific directory:
 ```bash
 pyrush install flask --target-dir ./my_custom_env/site-packages --max-workers 4
 ```
-This command will:
-1.  Resolve all dependencies for `flask`.
-2.  Download `flask` and all its dependencies into a local `./downloads/` directory.
-3.  Install all downloaded `.whl` files into `./my_custom_env/site-packages/`.
+To let PyRush attempt to auto-detect the installation directory:
+```bash
+pyrush install flask --max-workers 4
+```
 
 **Getting Help:**
 To see all available commands:
