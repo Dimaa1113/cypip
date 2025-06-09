@@ -10,9 +10,7 @@ import shutil
 from pathlib import Path
 import functools
 import site
-# Attempting to integrate packaging again
-from packaging.requirements import Requirement, InvalidRequirement
-from packaging.version import parse as parse_version
+# CRITICAL REVERT: Ensure no packaging imports are present
 
 """
 PyRush: PyPI Package Management Tool
@@ -91,93 +89,119 @@ def download_file(url, output_directory, filename_from_url, use_cache=True, cach
         return str(local_filepath)
     except requests.exceptions.RequestException as e: print(f"  Error downloading {url}: {e}"); return None
 
+def _simple_normalize_pypi_name(name):
+    if not isinstance(name, str): name = str(name)
+    return re.sub(r"[-_.]+", "-", name).lower()
+
 def query_pypi_simple_api(package_name):
-    url = f"https://pypi.org/simple/{package_name}/"
+    normalized_name = _simple_normalize_pypi_name(package_name)
+    url = f"https://pypi.org/simple/{normalized_name}/"
     try: response = requests.get(url); response.raise_for_status(); return response.text
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404: print(f"Package '{package_name}' not found on PyPI (404 Error).")
-        else: print(f"HTTP error querying PyPI for {package_name}: {e}")
-    except requests.exceptions.RequestException as e: print(f"Network error querying PyPI for {package_name}: {e}")
+        if e.response.status_code == 404: print(f"Package '{normalized_name}' (from '{package_name}') not found on PyPI Simple API (404 Error).")
+        else: print(f"HTTP error querying Simple API for {normalized_name}: {e}")
+    except requests.exceptions.RequestException as e: print(f"Network error querying Simple API for {normalized_name}: {e}")
     return None
 
 def parse_simple_api_html(html_content, package_name):
     soup = BeautifulSoup(html_content, 'html.parser'); files = []
-    norm_pkg_name = re.sub(r"[-_.]+", "-", package_name).lower()
+    query_normalized_name = _simple_normalize_pypi_name(package_name)
     for a in soup.find_all('a'):
         href = a.get('href'); fname = a.text.strip()
         if href and fname:
-            v, ftype, pname = "unknown", "unknown", "unknown"
-            whl = re.match(r"^(.*?)-(.*?)-(.*?)-(.*?)-(.*?)\.whl$", fname, re.IGNORECASE)
-            gz = re.match(r"^(.*?)-(.*?)\.tar\.gz$", fname, re.IGNORECASE)
-            zipf = re.match(r"^(.*?)-(.*?)\.zip$", fname, re.IGNORECASE)
-            if whl: ftype,pname,v = "wheel",whl.group(1),whl.group(2)
-            elif gz: ftype,pname,v = "sdist",gz.group(1),gz.group(2)
-            elif zipf: ftype,pname,v = "sdist",zipf.group(1),zipf.group(2)
-            if re.sub(r"[-_.]+", "-", pname).lower() == norm_pkg_name:
-                files.append({"filename":fname,"url":href,"version":v,"type":ftype,"package_name":pname})
+            v_str, ftype, parsed_pkg_name_from_file = "unknown", "unknown", "unknown"
+            match = re.match(r"^([a-zA-Z0-9._-]+?)-([a-zA-Z0-9_.!+]+)", fname)
+            if match:
+                parsed_pkg_name_from_file = match.group(1)
+                v_str = match.group(2)
+            if fname.endswith(".whl"): ftype = "wheel"
+            elif fname.endswith(".tar.gz"): ftype = "sdist"
+            elif fname.endswith(".zip"): ftype = "sdist"
+            if _simple_normalize_pypi_name(parsed_pkg_name_from_file) == query_normalized_name:
+                files.append({"filename":fname,"url":href,"version_str":v_str, "type":ftype,"package_name":parsed_pkg_name_from_file})
     return files
 
-def select_distribution_file(files_info, package_name, target_version=None):
+def select_distribution_file(files_info, package_name, target_version_str=None):
     if not files_info: return None
-    eligible = [f for f in files_info if f['version'] == target_version] if target_version else files_info
-    if not eligible and target_version: print(f"No files for version {target_version} of {package_name}."); return None
-    if not target_version:
-        try: eligible.sort(key=lambda x: x['version'], reverse=True)
-        except TypeError: print("Warning: Could not reliably sort versions.")
-    wheels = [f for f in eligible if f['type'] == 'wheel']
-    if wheels: print(f"Selected wheel: {wheels[0]['filename']} (v {wheels[0]['version']})"); return wheels[0]['url']
-    sdists = [f for f in eligible if f['type'] == 'sdist']
-    if sdists: print(f"Selected sdist: {sdists[0]['filename']} (v {sdists[0]['version']})"); return sdists[0]['url']
-    if target_version: print(f"Files for version {target_version} found, but no wheel/sdist.")
+    eligible_files = []
+    if target_version_str:
+        eligible_files = [f for f in files_info if f['version_str'] == target_version_str]
+        if not eligible_files: print(f"No files for version {target_version_str} of {package_name}."); return None
+    else:
+        try: eligible_files = sorted(files_info, key=lambda x: x['version_str'], reverse=True)
+        except Exception: print_verbose(f"Warning: Naive version string sort failed for {package_name}. Using original file order."); eligible_files = files_info
+    wheels = [f for f in eligible_files if f['type'] == 'wheel']
+    if wheels: print(f"Selected wheel: {wheels[0]['filename']} (v {wheels[0]['version_str']}) for {package_name}"); return wheels[0]['url']
+    sdists = [f for f in eligible_files if f['type'] == 'sdist']
+    if sdists: print(f"Selected sdist: {sdists[0]['filename']} (v {sdists[0]['version_str']}) for {package_name}"); return sdists[0]['url']
+    if target_version_str and eligible_files: print(f"Files for version {target_version_str} found, but no wheel/sdist.")
+    elif not eligible_files: print(f"No suitable files found for {package_name} {target_version_str or '(latest)'}.")
     return None
 
 # --- Dependency Resolution ---
 def get_package_metadata_json(package_name):
-    url = f"https://pypi.org/pypi/{package_name}/json"
+    normalized_name = _simple_normalize_pypi_name(package_name)
+    url = f"https://pypi.org/pypi/{normalized_name}/json"
     try: response = requests.get(url); response.raise_for_status(); return response.json()
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404: print(f"Package '{package_name}' not on PyPI (JSON API).")
-        else: print(f"HTTP error (JSON API) for {package_name}: {e}")
-    except requests.exceptions.RequestException as e: print(f"Network error (JSON API) for {package_name}: {e}")
-    except requests.exceptions.JSONDecodeError as e: print(f"JSON decode error for {package_name}: {e}")
+        if e.response.status_code == 404: print(f"Package '{normalized_name}' (from '{package_name}') not on PyPI (JSON API).")
+        else: print(f"HTTP error (JSON API) for {normalized_name}: {e}")
+    except requests.exceptions.RequestException as e: print(f"Network error (JSON API) for {normalized_name}: {e}")
+    except requests.exceptions.JSONDecodeError as e: print(f"JSON decode error for {normalized_name}: {e}")
     return None
 
-def parse_dependency_string(dep_string): # Simple parser, used when packaging is not available/reverted
+def parse_dependency_string(dep_string):
     match = re.match(r"^\s*([a-zA-Z0-9._-]+)", dep_string)
     return match.group(1).strip() if match else None
 
-MAX_RECURSION_DEPTH = 20
-def resolve_dependencies_recursive(pkg_name, processed, all_deps, depth=0):
-    norm_name = pkg_name.lower().replace("_", "-")
-    if depth > MAX_RECURSION_DEPTH: print(f"{'  '*depth}ERR: Max depth for {norm_name}.", file=sys.stderr); return
-    if norm_name in processed: return
-    print(f"Processing: {norm_name}")
-    processed.add(norm_name); all_deps.add(norm_name)
-    meta = get_package_metadata_json(norm_name)
-    if not meta and pkg_name != norm_name: meta = get_package_metadata_json(pkg_name)
-    if not meta: print(f"No metadata for {pkg_name}. Skip deps."); return
-    reqs = meta.get("info", {}).get("requires_dist")
-    if reqs:
-        for dep_s in reqs:
-            dep_name = parse_dependency_string(dep_s)
-            if dep_name:
-                if ";" in dep_s:
-                    m_str = dep_s.split(";",1)[1].strip()
-                    if "extra ==" in m_str or "python_version" in m_str : pass
-                resolve_dependencies_recursive(dep_name, processed, all_deps, depth + 1)
-            else: print(f"Warn: Cannot parse dep string: '{dep_s}' for {pkg_name}", file=sys.stderr)
-    else: print(f"No 'requires_dist' for {pkg_name}.")
+MAX_RECURSION_DEPTH_EQUIVALENT = 1000
+def resolve_dependencies_iterative(initial_pkg_name, processed_names, all_deps_names):
+    initial_pkg_name_norm = _simple_normalize_pypi_name(initial_pkg_name)
+    queue = {initial_pkg_name_norm}
+    processed_count = 0
+    while queue and processed_count < MAX_RECURSION_DEPTH_EQUIVALENT :
+        pkg_name_to_check_norm = queue.pop()
+        if pkg_name_to_check_norm in processed_names:
+            print_verbose(f"Already processed '{pkg_name_to_check_norm}'. Skipping.")
+            continue
+        print(f"Processing: {pkg_name_to_check_norm}")
+        processed_names.add(pkg_name_to_check_norm)
+        all_deps_names.add(pkg_name_to_check_norm)
+        processed_count +=1
+        meta = get_package_metadata_json(pkg_name_to_check_norm)
+        original_name_for_retry = initial_pkg_name if pkg_name_to_check_norm == initial_pkg_name_norm else pkg_name_to_check_norm
+        if not meta and _simple_normalize_pypi_name(original_name_for_retry) != original_name_for_retry:
+             print_verbose(f"Retrying metadata fetch for '{original_name_for_retry}' (original case) as '{pkg_name_to_check_norm}' failed.")
+             meta = get_package_metadata_json(original_name_for_retry)
+        if not meta:
+            print_verbose(f"No metadata for {pkg_name_to_check_norm} (original name for retry context: {original_name_for_retry}). Skip deps.")
+            continue
+        reqs_list = meta.get("info", {}).get("requires_dist")
+        if reqs_list:
+            for dep_string in reqs_list:
+                dep_name_parsed = parse_dependency_string(dep_string)
+                if dep_name_parsed:
+                    dep_name_norm = _simple_normalize_pypi_name(dep_name_parsed)
+                    print_verbose(f"  Found requirement: '{dep_string}' -> Parsed name: '{dep_name_norm}'")
+                    if ";" in dep_string:
+                        marker_str = dep_string.split(";",1)[1].strip()
+                        if "extra ==" in marker_str: print_verbose(f"  Info: Dependency '{dep_name_norm}' is an extra. PyRush will add base name to queue.")
+                        elif "python_version" in marker_str: print_verbose(f"  Info: Dependency '{dep_name_norm}' has python_version marker: '{marker_str}'. PyRush will add base name to queue.")
+                    if dep_name_norm not in processed_names: queue.add(dep_name_norm)
+                else: print_verbose(f"Warning: Skipping invalid/unparsable requirement string for '{pkg_name_to_check_norm}': '{dep_string}'")
+        else: print_verbose(f"No 'requires_dist' for {pkg_name_to_check_norm}.")
+    if processed_count >= MAX_RECURSION_DEPTH_EQUIVALENT: print("Warning: Reached maximum processing iterations. Resulting list might be incomplete.", file=sys.stderr)
 
 # --- Combined Download Logic ---
 def download_package_simple_latest(pkg_name, dl_dir, use_cache=True, cache_path=None):
-    norm_q_name = pkg_name.lower().replace("_", "-")
-    print(f"Processing package for download: {norm_q_name} (original: {pkg_name})")
+    norm_q_name = _simple_normalize_pypi_name(pkg_name)
+    print(f"Processing package for download: {norm_q_name} (original input: {pkg_name})")
     html = query_pypi_simple_api(norm_q_name)
-    if not html: err="Simple API query failed."; print(f"  ERR: {err}"); return pkg_name,None,err
+    if not html: err=f"Simple API query failed for {norm_q_name}."; print(f"  ERR: {err}"); return pkg_name,None,err
     files = parse_simple_api_html(html, norm_q_name)
-    if not files: err="No files on Simple API."; print(f"  ERR: {err}"); return pkg_name,None,err
+    if not files: err=f"No files on Simple API for {norm_q_name}."; print(f"  ERR: {err}"); return pkg_name,None,err
     url = select_distribution_file(files, norm_q_name, None)
-    if not url: err="No suitable file selected."; print(f"  ERR: {err}"); return pkg_name,None,err
+    if not url: err=f"No suitable file selected for {norm_q_name}."; print(f"  ERR: {err}"); return pkg_name,None,err
     fname = url.split('/')[-1].split('#')[0]
     dl_path = download_file(url,dl_dir,fname,use_cache,cache_path)
     if dl_path: return pkg_name, dl_path, None
@@ -186,140 +210,121 @@ def download_package_simple_latest(pkg_name, dl_dir, use_cache=True, cache_path=
 # --- Command Handlers ---
 def handle_resolve_command(args):
     print(f"--- Resolving dependencies for {args.package_name} ---")
-    all_deps=set(); processed=set()
-    resolve_dependencies_recursive(args.package_name, processed, all_deps, 0)
-    print("\nAll unique dependencies:"); [print(f"- {d}") for d in sorted(list(all_deps))]
+    all_deps_names=set(); processed_names=set()
+    initial_name_norm = _simple_normalize_pypi_name(args.package_name)
+    resolve_dependencies_iterative(initial_name_norm, processed_names, all_deps_names)
+    print("\nAll unique dependencies (normalized names):"); [print(f"- {d}") for d in sorted(list(all_deps_names))]
     print("--- Resolution finished ---")
 
 def handle_download_command(args):
     print(f"--- Downloading: {args.package_name} {args.version or '(latest)'} to {os.path.abspath(args.output_dir)} ---")
-    use_cache=not args.no_cache; cache_dir=get_cache_dir(args.cache_dir) if use_cache else None
-    if use_cache:
-        print(f"--- Cache enabled. Cache directory: {cache_dir} ---")
+    use_cache=not args.no_cache; cache_dir_obj=get_cache_dir(args.cache_dir) if use_cache else None
+    if use_cache: print(f"--- Cache enabled. Cache directory: {cache_dir_obj} ---")
     else: print("--- Cache disabled ---")
-    pkg_to_dl = args.package_name
-    html = query_pypi_simple_api(pkg_to_dl)
-    if not html: print(f"No Simple API page for {pkg_to_dl}."); print("--- Download finished ---"); return
-    files = parse_simple_api_html(html, pkg_to_dl)
-    if not files: print(f"No files for {pkg_to_dl}."); print("--- Download finished ---"); return
-    url = select_distribution_file(files, pkg_to_dl, args.version)
-    if url: fname=url.split('/')[-1].split('#')[0]; print(f"Selected: {fname}"); download_file(url,args.output_dir,fname,use_cache,cache_dir)
-    else: print(f"No suitable file for {pkg_to_dl} {args.version or '(latest)'}.")
+    pkg_to_dl_norm = _simple_normalize_pypi_name(args.package_name)
+    html = query_pypi_simple_api(pkg_to_dl_norm)
+    if not html: print(f"No Simple API page for {pkg_to_dl_norm}."); print("--- Download finished ---"); return
+    files = parse_simple_api_html(html, pkg_to_dl_norm)
+    if not files: print(f"No files for {pkg_to_dl_norm}."); print("--- Download finished ---"); return
+    url = select_distribution_file(files, pkg_to_dl_norm, args.version)
+    if url: fname=url.split('/')[-1].split('#')[0]; print(f"Selected: {fname}"); download_file(url,args.output_dir,fname,use_cache,cache_dir_obj)
+    else: print(f"No suitable file for {pkg_to_dl_norm} {args.version or '(latest)'}.")
     print("--- Download finished ---")
 
 def handle_install_command(args):
-    target_dir = args.target_dir
-    if not target_dir:
+    target_dir_path = args.target_dir
+    if not target_dir_path:
         print_verbose("No target directory specified. Auto-determining...")
-        target_dir = determine_target_install_dir()
-        if target_dir: print(f"Using auto-determined target: {target_dir}\nUse --target-dir to override.")
+        target_dir_path = determine_target_install_dir()
+        if target_dir_path: print(f"Using auto-determined target: {target_dir_path}\nUse --target-dir to override.")
         else: print("ERR: No suitable target dir. Use --target-dir.", file=sys.stderr); sys.exit(1)
-
-    print(f"--- Full install: {args.package_name} to {os.path.abspath(target_dir)} ---")
-    use_cache=not args.no_cache; cache_dir=get_cache_dir(args.cache_dir) if use_cache else None
-    if use_cache: print(f"--- Cache enabled. Cache directory: {cache_dir} ---")
+    print(f"--- Full install: {args.package_name} to {os.path.abspath(target_dir_path)} ---")
+    use_cache=not args.no_cache; cache_dir_obj=get_cache_dir(args.cache_dir) if use_cache else None
+    if use_cache: print(f"--- Cache enabled. Cache directory: {cache_dir_obj} ---")
     else: print("--- Cache disabled ---")
-
-    all_deps=set(); processed=set()
+    all_deps_names=set(); processed_names=set()
     print(f"\nStep 1: Resolving {args.package_name}...")
-    resolve_dependencies_recursive(args.package_name, processed, all_deps, 0)
-    if not all_deps: print("No deps. Abort."); print("--- Install finished ---"); return
-
+    initial_name_norm = _simple_normalize_pypi_name(args.package_name)
+    resolve_dependencies_iterative(initial_name_norm, processed_names, all_deps_names)
+    if not all_deps_names: print("No deps. Abort."); print("--- Install finished ---"); return
     dl_intermed_dir="./downloads"; os.makedirs(dl_intermed_dir, exist_ok=True)
-    print(f"\nStep 2: Download {len(all_deps)} pkgs to '{dl_intermed_dir}' (max {args.max_workers} workers)...")
-    sorted_deps=sorted(list(all_deps)); dl_results=[]; good_wheels=[]
-    worker = functools.partial(download_package_simple_latest, dl_dir=dl_intermed_dir, use_cache=use_cache, cache_path=cache_dir)
+    print(f"\nStep 2: Download {len(all_deps_names)} pkgs to '{dl_intermed_dir}' (max {args.max_workers} workers)...")
+    sorted_deps_names=sorted(list(all_deps_names)); dl_results=[]; good_wheels=[]
+    worker = functools.partial(download_package_simple_latest, dl_dir=dl_intermed_dir, use_cache=use_cache, cache_path=cache_dir_obj)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-        fm = {executor.submit(worker, n): n for n in sorted_deps}
+        fm = {executor.submit(worker, n): n for n in sorted_deps_names}
         for i, f in enumerate(concurrent.futures.as_completed(fm)):
-            pkg_n_done=fm[f]
+            pkg_n_done_norm=fm[f]
             try:
                 name_returned_by_worker, path, error = f.result()
                 dl_results.append({"name":name_returned_by_worker,"path":path,"error":error,"status":"OK" if path else "FAIL"})
-                if path:
-                    print(f"  OK DL [{i+1}/{len(sorted_deps)}] {name_returned_by_worker} to {path}")
-                    good_wheels.append(path)
-                else:
-                    print(f"  FAIL DL [{i+1}/{len(sorted_deps)}] {name_returned_by_worker}. Err: {error}")
-            except Exception as exc:
-                print(f"  EXC DL [{i+1}/{len(sorted_deps)}] {pkg_n_done} generated: {exc}")
-                dl_results.append({"name":pkg_n_done,"path":None,"error":str(exc),"status":"EXC"})
+                if path: print(f"  OK DL [{i+1}/{len(sorted_deps_names)}] {name_returned_by_worker} to {path}"); good_wheels.append(path)
+                else: print(f"  FAIL DL [{i+1}/{len(sorted_deps_names)}] {name_returned_by_worker}. Err: {error}")
+            except Exception as exc: print(f"  EXC DL [{i+1}/{len(sorted_deps_names)}] {pkg_n_done_norm} generated: {exc}"); dl_results.append({"name":pkg_n_done_norm,"path":None,"error":str(exc),"status":"EXC"})
     print("\nDL Summary:"); dl_ok=len(good_wheels); print(f"  {dl_ok}/{len(dl_results)} DLed OK.")
     if dl_ok < len(dl_results): print("  Failed/Skipped DLs:"); [print(f"    - {r['name']}: {r['error']}") for r in dl_results if r["status"] != "OK"]
-
     if good_wheels:
-        print(f"\nStep 3: Install {len(good_wheels)} pkgs to {target_dir} (max {args.max_workers} workers)...")
-        inst_results=[]
+        print(f"\nStep 3: Install {len(good_wheels)} pkgs to {target_dir_path} (max {args.max_workers} workers)...")
+        install_results=[]
         inst_script=os.path.join(os.path.dirname(os.path.abspath(__file__)),"package_installer.py")
         if not os.path.exists(inst_script): print(f"  ERR: {inst_script} not found. No install.");
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-                fm_inst = {executor.submit(subprocess.run, [sys.executable,inst_script,wheel,target_dir],capture_output=True,text=True): wheel for wheel in good_wheels}
+                fm_inst = {executor.submit(subprocess.run, [sys.executable,inst_script,wheel,target_dir_path],capture_output=True,text=True): wheel for wheel in good_wheels}
                 for i,f in enumerate(concurrent.futures.as_completed(fm_inst)):
                     whl_done=fm_inst[f]; pkg_whl_name=os.path.basename(whl_done).split('-',1)[0]
                     try:
                         res=f.result()
-                        if res.returncode==0:
-                            print(f"  OK Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name}")
-                            inst_results.append({"name":pkg_whl_name,"status":"OK"})
-                        else:
-                            print(f"  FAIL Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name}.\n    Stdout:\n{res.stdout.strip()}\n    Stderr:\n{res.stderr.strip()}")
-                            inst_results.append({"name":pkg_whl_name,"status":"FAIL","error":res.stderr})
-                    except Exception as exc:
-                        print(f"  EXC Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name} generated: {exc}")
-                        inst_results.append({"name":pkg_whl_name,"status":"EXC","error":str(exc)})
+                        if res.returncode==0: print(f"  OK Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name}"); inst_results.append({"name":pkg_whl_name,"status":"OK"})
+                        else: print(f"  FAIL Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name}.\n    Stdout:\n{res.stdout.strip()}\n    Stderr:\n{res.stderr.strip()}"); inst_results.append({"name":pkg_whl_name,"status":"FAIL","error":res.stderr})
+                    except Exception as exc: print(f"  EXC Inst [{i+1}/{len(good_wheels)}] {pkg_whl_name} generated: {exc}"); inst_results.append({"name":pkg_whl_name,"status":"EXC","error":str(exc)})
             print("\nInstall Summary:"); inst_ok_cnt=sum(1 for r in inst_results if r["status"]=="OK"); print(f"  {inst_ok_cnt}/{len(inst_results)} installed OK.")
             if inst_ok_cnt < len(inst_results): print("  Failed/Skipped Installs:"); [print(f"    - {r['name']}: {r.get('error','N/A')}") for r in inst_results if r["status"] != "OK"]
     else: print("\nStep 3: Install skipped, no pkgs DLed.")
     print("--- Full install process finished ---")
 
 def main():
-    # Minimal test for packaging library
-    print("--- Starting minimal packaging library test ---", file=sys.stderr)
-    sys.stderr.flush()
-    test_passed = False
-    try:
-        # Test import and basic usage
-        # from packaging.requirements import Requirement, InvalidRequirement # Already at top
-        # from packaging.version import parse as parse_version # Already at top
+    # print("DEBUG: main() started.", file=sys.stderr) # Debug prints removed
+    # sys.stderr.flush()
+    parser = argparse.ArgumentParser(description="PyRush: PyPI Package Management Tool")
+    cpu_cores = os.cpu_count(); def_mw = min(5, cpu_cores + 4 if cpu_cores else 5)
+    subs = parser.add_subparsers(title="Commands", dest="command", required=True, help="Use <cmd> -h for details.")
 
-        print("Successfully imported 'packaging' modules.", file=sys.stderr)
-        sys.stderr.flush()
+    p_dl = subs.add_parser("download", help="Download a package.")
+    p_dl.add_argument("package_name", help="Package name.")
+    p_dl.add_argument("--version", help="Version (default: latest).")
+    p_dl.add_argument("--output-dir", default="./downloads/", help="Output dir (default: ./downloads/).")
+    p_dl.add_argument("--max-workers", type=int, default=def_mw, help=f"Max workers (default: {def_mw}).")
+    p_dl.add_argument("--no-cache", action="store_true", help="Disable cache.")
+    p_dl.add_argument("--cache-dir", default=None, type=str, help="Custom cache dir.")
+    p_dl.set_defaults(func=handle_download_command)
 
-        test_version_str = "1.2.3"
-        parsed_version = parse_version(test_version_str) # Uses top-level import
-        print(f"Parsed version '{test_version_str}': {parsed_version}", file=sys.stderr)
-        sys.stderr.flush()
+    p_in = subs.add_parser("install", help="Resolve, download, & install package + deps.")
+    p_in.add_argument("package_name", help="Root package name.")
+    p_in.add_argument("--target-dir", default=None, help="Target install dir (auto-detected if None).")
+    p_in.add_argument("--max-workers", type=int, default=def_mw, help=f"Max workers (default: {def_mw}).")
+    p_in.add_argument("--no-cache", action="store_true", help="Disable cache.")
+    p_in.add_argument("--cache-dir", default=None, type=str, help="Custom cache dir.")
+    p_in.set_defaults(func=handle_install_command)
 
-        test_req_str = "requests>2.0"
-        req = Requirement(test_req_str) # Uses top-level import
-        print(f"Parsed requirement '{test_req_str}': Name='{req.name}', Specifier='{req.specifier!s}', Markers='{req.marker!s}'", file=sys.stderr)
-        sys.stderr.flush()
+    p_res = subs.add_parser("resolve", help="Resolve and list dependencies.")
+    p_res.add_argument("package_name", help="Package name.")
+    p_res.set_defaults(func=handle_resolve_command)
 
-        test_complex_req_str = "sphinxcontrib-applehelp; extra == 'docs_html'"
-        complex_req = Requirement(test_complex_req_str)
-        print(f"Successfully parsed complex requirement: Name='{complex_req.name}', Specifier='{complex_req.specifier!s}', Markers='{complex_req.marker!s}'", file=sys.stderr)
-        sys.stderr.flush()
-
-        test_passed = True
-    except Exception as e:
-        print(f"Error during minimal packaging test: {e}", file=sys.stderr)
-        sys.stderr.flush()
-
-    if test_passed:
-        print("--- Minimal packaging library test: SUCCEEDED ---", file=sys.stderr)
+    args = parser.parse_args()
+    # print(f"DEBUG: Parsed args: {args}", file=sys.stderr) # Debug prints removed
+    # sys.stderr.flush()
+    if hasattr(args, 'func'):
+        # print(f"DEBUG: Calling func for command {args.command}", file=sys.stderr) # Debug prints removed
+        # sys.stderr.flush()
+        args.func(args)
     else:
-        print("--- Minimal packaging library test: FAILED ---", file=sys.stderr)
-    sys.stderr.flush()
+        # print("DEBUG: No func attribute on args object. Dumping help.", file=sys.stderr) # Debug prints removed
+        # sys.stderr.flush()
+        parser.print_help()
 
-    print("Exiting after minimal packaging test. Main CLI logic will not run.", file=sys.stderr)
-    sys.stderr.flush()
-    return # IMPORTANT: Exit after the test
-
-    # Original argparse and command handling logic remains below this return,
-    # but will not be executed during this specific test.
-    # parser = argparse.ArgumentParser(description="PyRush: PyPI Package Management Tool")
-    # # ... (rest of main) ...
+    # print("DEBUG: main() finished.", file=sys.stderr) # Debug prints removed
+    # sys.stderr.flush()
 
 if __name__ == "__main__":
     main()
