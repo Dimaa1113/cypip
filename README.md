@@ -1,8 +1,8 @@
-# PyPI Tool Analog
+# PyRush
 
 ## Description
 
-PyPI Tool Analog is a prototype Python package management tool designed to demonstrate core package handling functionalities. It supports dependency resolution, parallel downloading of package files from PyPI, and parallel installation of `.whl` (wheel) packages into a specified target environment.
+PyRush is a prototype Python package management tool designed to demonstrate core package handling functionalities. It supports dependency resolution, parallel downloading of package files from PyPI, and parallel installation of `.whl` (wheel) packages into a specified target environment.
 
 This tool is intended as an educational example and a proof-of-concept for certain package management operations.
 
@@ -11,7 +11,7 @@ This tool is intended as an educational example and a proof-of-concept for certa
 *   **Dependency Resolution:** Identifies and lists all direct and indirect dependencies for a given package.
 *   **Parallel Downloads:** Downloads required packages from PyPI concurrently to speed up the acquisition process.
 *   **Parallel Installation:** Installs downloaded `.whl` packages into a target directory in parallel.
-*   **Command-Line Interface:** Provides a `pypitool` command with sub-commands for different actions (`resolve`, `download`, `install`).
+*   **Command-Line Interface:** Provides a `pyrush` command with sub-commands for different actions (`resolve`, `download`, `install`).
 
 ## Requirements
 
@@ -25,7 +25,7 @@ This tool is intended as an educational example and a proof-of-concept for certa
 
 ## Installation from Source
 
-To install PyPI Tool Analog from the source code:
+To install PyRush from the source code:
 
 1.  **Ensure you have the `build` tool:**
     ```bash
@@ -38,13 +38,13 @@ To install PyPI Tool Analog from the source code:
     ```bash
     python -m build
     ```
-    This will create a `.whl` file in the `dist/` directory (e.g., `dist/pypi_tool_analog-0.1.0-py3-none-any.whl`).
+    This will create a `.whl` file in the `dist/` directory (e.g., `dist/pyrush-0.1.0-py3-none-any.whl`).
 
 4.  **Install the built package using pip:**
     ```bash
-    pip install dist/pypi_tool_analog-0.1.0-py3-none-any.whl
+    pip install dist/pyrush-0.1.0-py3-none-any.whl
     ```
-    *(Adjust the filename in the command above if the package name or version changes.)*
+    *(Adjust the filename in the command above if the package name or version changes. The name will now be `pyrush`.)*
 
     Alternatively, you can often build and install in one step from the project root (if you have `setuptools` and `wheel` available, which are part of the `build-system` requires):
     ```bash
@@ -53,32 +53,32 @@ To install PyPI Tool Analog from the source code:
 
 ## Usage
 
-The tool is accessed via the `pypitool` command-line interface.
+The tool is accessed via the `pyrush` command-line interface.
 
 **Basic Structure:**
 ```bash
-pypitool <command> [options] <package_name>
+pyrush <command> [options] <package_name>
 ```
 
 **Available Commands:**
 
-*   `pypitool resolve <package_name>`
+*   `pyrush resolve <package_name>`
     *   Resolves and lists all unique dependencies for the specified `<package_name>`.
 
-*   `pypitool download <package_name> [--version <version>] [--output-dir <dir>] [--max-workers <N>]`
+*   `pyrush download <package_name> [--version <version>] [--output-dir <dir>] [--max-workers <N>]`
     *   Downloads the specified `<package_name>`.
     *   `--version`: Download a specific version. Defaults to the latest suitable if not provided.
     *   `--output-dir`: Directory to save the downloaded file(s) (default: `./downloads/`).
     *   `--max-workers`: Number of parallel workers (currently mainly relevant if the command is extended for multiple packages).
 
-*   `pypitool install <package_name> [--target-dir <dir>] [--max-workers <N>]`
+*   `pyrush install <package_name> [--target-dir <dir>] [--max-workers <N>]`
     *   Resolves all dependencies for `<package_name>`, downloads them, and then installs them all into the specified target directory.
     *   `--target-dir`: Directory where packages will be installed (default: `./installed_packages/`). This should typically be a `site-packages` directory within a virtual environment.
     *   `--max-workers`: Number of parallel workers for download and install phases.
 
 **Example for `install` command:**
 ```bash
-pypitool install flask --target-dir ./my_custom_env/site-packages --max-workers 4
+pyrush install flask --target-dir ./my_custom_env/site-packages --max-workers 4
 ```
 This command will:
 1.  Resolve all dependencies for `flask`.
@@ -88,13 +88,13 @@ This command will:
 **Getting Help:**
 To see all available commands:
 ```bash
-pypitool -h
+pyrush -h
 ```
 For help with a specific command:
 ```bash
-pypitool <command> -h
+pyrush <command> -h
 ```
-Example: `pypitool install -h`
+Example: `pyrush install -h`
 
 ## Current Limitations & Disclaimer
 
