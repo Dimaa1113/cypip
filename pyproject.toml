@@ -11,8 +11,8 @@ readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
     "requests>=2.20.0",
-    "beautifulsoup4>=4.9.0"
-    # "packaging>=20.0" # Reverted: Removed due to timeout issues in test env
+    "beautifulsoup4>=4.9.0",
+    "packaging>=20.0" # Re-adding for integration attempt
 ]
 
 # Classifiers help users find your project by categorizing it.
